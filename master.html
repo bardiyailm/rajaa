@@ -70,8 +70,8 @@
     app.replaceChildren(head(),
       h('div', { style: 'display:flex;justify-content:space-between;align-items:center;margin-bottom:12px' }, h('b', {}, pending ? `${pending} طلب ينتظر مراجعتك` : 'لا طلبات جديدة'),
         h('button', { class: 'btn ghost sm', onclick: () => { store.del(KEY); session = null; login(); } }, 'خروج')),
-      creds ? credsCard() : '',
-      d.items.length ? d.items.map(row) : h('p', { class: 'muted center' }, 'لم يصل أي طلب بعد.'));
+      ...(creds ? [credsCard()] : []),
+      ...(d.items.length ? d.items.map(row) : [h('p', { class: 'muted center' }, 'لم يصل أي طلب بعد.')]));
   }
 
   session ? list() : login();
