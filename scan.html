@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>شاشة الكاشير</title>
+<meta name="theme-color" content="#1A120E">
+<meta name="robots" content="noindex">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<main class="wrap" id="app"><div class="spinner" role="status" aria-label="جارٍ التحميل"></div></main>
+<script src="vendor/jsQR.js"></script>
+<script src="config.js"></script>
+<script src="app.js"></script>
+<script src="offline.js"></script>
+<script>
+(async () => {
+  const slug = slugFromPath();
+  const app = $('#app');
+  const KEY = 'rj_sess_' + slug;
+  let shop, session = null, stream = null, raf = 0, busy = false, lastCode = '', lastAt = 0, resultTimer, syncTimer;
+  const off = CashierOffline(slug);
+  if ('serviceWorker' in navigator) { const warm = () => fetch(location.href).catch(() => {}); navigator.serviceWorker.register('sw.js').then(() => navigator.serviceWorker.ready).then(() => { if (navigator.serviceWorker.controller) warm(); else navigator.serviceWorker.addEventListener('controllerchange', warm, { once: true }); }).catch(() => {}); }
+
+  const SK = 'rj_shop_' + slug;
+  try { shop = await api('GET', '/api/shop/' + encodeURIComponent(slug)); store.set(SK, JSON.stringify(shop)); }
+  catch (e) {
+    try { shop = JSON.parse(store.get(SK) || 'null'); } catch {}
+    if (!shop) { app.replaceChildren(h('div', { class: 'card center' }, h('h1', {}, e.status === 0 ? 'لا اتصال. افتح الصفحة مرة واحدة بالإنترنت أولاً.' : 'الرابط غير صحيح'))); return; }
+  }
+  applyBrand(shop.color);
+  setManifest('كاشير — ' + shop.name, 'كاشير ' + shop.name, shop.color);
+  document.title = 'كاشير ' + shop.name;
+
+  try { const s = JSON.parse(store.get(KEY) || 'null'); if (s && s.session) session = s.session; } catch {}
+
+  const ui = {};
+  function header(extra) {
+    return h('div', { class: 'brandbar' },
+      h('div', { class: 'logo' }, [...shop.name][0]),
+      h('div', { style: 'flex:1' }, h('h1', {}, shop.name), h('div', { class: 'muted small' }, 'شاشة الكاشير'), ui.net = h('div', { class: 'small', style: 'margin-top:2px' })),
+      extra);
+  }
+
+  function showLogin() {
+    stopCam();
+    const err = h('p', { class: 'err hide', role: 'alert' });
+    const pin = h('input', { type: 'password', inputmode: 'numeric', autocomplete: 'current-password', maxlength: 8, placeholder: '••••', class: 'num', required: true });
+    const btn = h('button', { class: 'btn block', type: 'submit' }, 'دخول');
+    app.replaceChildren(header(), h('form', { class: 'card', novalidate: true, onsubmit: async (ev) => {
+      ev.preventDefault(); err.classList.add('hide');
+      await guard(btn, async () => {
+        try {
+          const r = await api('POST', '/api/login/cashier', { slug, pin: pin.value });
+          session = r.session;
+          store.set(KEY, JSON.stringify({ session, role: r.role }));
+          showScanner(); startOffline();
+        } catch (e) { err.textContent = e.message; err.classList.remove('hide'); pin.select(); }
+      });
+    } }, h('label', { class: 'f' }, 'رمز الكاشير', pin), err, btn));
+    pin.focus();
+  }
+
+  function logout() { store.del(KEY); session = null; showLogin(); }
+
+  /* ---------- scanner ---------- */
+  function showScanner() {
+    ui.video = h('video', { playsinline: true, muted: true, autoplay: true });
+    ui.frame = h('div', { class: 'frame hide' });
+    ui.msg = h('div', { class: 'msg' }, 'جارٍ تشغيل الكاميرا…');
+    ui.result = h('div');
+    ui.canvas = document.createElement('canvas');
+    const phone = h('input', { type: 'tel', inputmode: 'tel', class: 'num', placeholder: '01012345678', style: 'margin-top:0' });
+    const pbtn = h('button', { class: 'btn ghost', type: 'submit' }, 'ختم');
+
+    app.replaceChildren(
+      header(h('button', { class: 'btn ghost sm', onclick: logout }, 'خروج')),
+      h('div', { class: 'cam' }, ui.video, ui.frame, ui.msg),
+      ui.result,
+      h('form', { class: 'card', style: 'margin-top:14px', onsubmit: async (ev) => {
+        ev.preventDefault();
+        if (!phone.value.trim()) return;
+        await guard(pbtn, async () => { await submit({ phone: phone.value }); phone.value = ''; });
+      } },
+        h('label', { class: 'f', style: 'margin:0' }, 'العميل بلا هاتف أو الكاميرا لا تعمل؟ اكتب رقمه', h('div', { style: 'display:flex;gap:8px;margin-top:6px' }, phone, pbtn))));
+    startCam();
+  }
+
+  async function startCam() {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      ui.msg.textContent = 'الكاميرا تحتاج اتصالاً آمناً (HTTPS). استخدم إدخال الرقم بالأسفل.'; return;
+    }
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' }, width: { ideal: 960 } }, audio: false });
+      ui.video.srcObject = stream;
+      await ui.video.play();
+      ui.msg.classList.add('hide');
+      ui.frame.classList.remove('hide');
+      loop();
+    } catch (e) {
+      ui.msg.textContent = e && e.name === 'NotAllowedError'
+        ? 'اسمح للمتصفح باستخدام الكاميرا ثم أعد تحميل الصفحة. أو استخدم إدخال الرقم بالأسفل.'
+        : 'تعذّر تشغيل الكاميرا. استخدم إدخال الرقم بالأسفل.';
+    }
+  }
+  function stopCam() {
+    cancelAnimationFrame(raf);
+    if (stream) stream.getTracks().forEach((t) => t.stop());
+    stream = null;
+  }
+
+  let frame = 0;
+  function loop() {
+    raf = requestAnimationFrame(loop);
+    if (busy || !ui.video || ui.video.readyState < 2 || (++frame % 3)) return;
+    const vw = ui.video.videoWidth, vh = ui.video.videoHeight;
+    if (!vw) return;
+    const w = 360, hh = Math.round((vh / vw) * w);
+    ui.canvas.width = w; ui.canvas.height = hh;
+    const ctx = ui.canvas.getContext('2d', { willReadFrequently: true });
+    ctx.drawImage(ui.video, 0, 0, w, hh);
+    const img = ctx.getImageData(0, 0, w, hh);
+    const r = jsQR(img.data, w, hh, { inversionAttempts: 'dontInvert' });
+    if (r && r.data && /^RJ[12]:/.test(r.data)) {
+      const now = Date.now();
+      if (r.data === lastCode && now - lastAt < 6000) return;
+      lastCode = r.data; lastAt = now;
+      submit({ code: r.data });
+    }
+  }
+
+  /* ---------- offline engine ---------- */
+  function netStatus() {
+    if (!ui.net) return;
+    const n = off.pending();
+    const online = navigator.onLine !== false && !offlineNow;
+    ui.net.textContent = (online ? '● متصل' : '● بدون إنترنت') + (n ? ` · ${n} بانتظار المزامنة` : '') + (!online && !off.ready() ? ' · لا بيانات محلية بعد' : '');
+    ui.net.style.color = online ? '#047857' : '#B45309';
+  }
+  let offlineNow = false;
+  async function trySync() {
+    if (!session) return;
+    try {
+      await off.sync(api, session);
+      await off.fetchRoster(api, session);
+      offlineNow = false;
+    } catch (e) { if (e.status === 0) offlineNow = true; else if (e.status === 401) { /* يبقى الطابور ويُزامَن بعد الدخول */ } }
+    netStatus();
+  }
+  function startOffline() {
+    clearInterval(syncTimer);
+    trySync();
+    syncTimer = setInterval(trySync, 15000);
+  }
+  window.addEventListener('online', () => { offlineNow = false; trySync(); });
+  window.addEventListener('offline', () => { offlineNow = true; netStatus(); });
+
+  async function offlineSubmit(payload) {
+    offlineNow = true;
+    if (!off.ready()) { netStatus(); throw new Error('لا يوجد اتصال، ولا توجد بيانات محلية بعد. اتصل بالإنترنت مرة واحدة ثم أعد المحاولة.'); }
+    let c = null;
+    if (payload.code) {
+      const v = await off.verify(payload.code);
+      if (!v.ok) throw new Error(v.reason === 'expired' ? 'الكود منتهي. اطلب من العميل فتح كارته من جديد.' : v.reason === 'unknown' ? 'عميل جديد لم تصل بياناته بعد. أدخل رقمه أو انتظر عودة الإنترنت.' : 'هذا ليس كارت ولاء صالحاً');
+      c = v.customer;
+    } else c = off.find(payload);
+    if (!c) throw new Error('العميل غير مسجّل في هذا المقهى');
+    const r = off.stamp(c);
+    netStatus();
+    return r;
+  }
+
+  window.__rjSubmit = (p) => submit(p);
+  async function submit(payload) {
+    busy = true;
+    try {
+      let r;
+      try { r = await api('POST', '/api/scan', payload, session); offlineNow = false; off.touch(r.customer.id, r.customer.stamps, r.added); }
+      catch (e) { if (e.status === 0) r = await offlineSubmit(payload); else throw e; }
+      showResult(r);
+      netStatus();
+      if (navigator.vibrate) navigator.vibrate(r.added ? [80] : [40, 60, 40]);
+    } catch (e) {
+      if (e.status === 401) { toast('انتهت الجلسة، سجّل الدخول (عملياتك المحفوظة لن تضيع)', true); return logout(); }
+      showError(e.message);
+      if (navigator.vibrate) navigator.vibrate([120, 60, 120]);
+    } finally { busy = false; }
+  }
+
+  function dots(c) {
+    const shown = Math.min(c.stamps, c.target);
+    return h('div', { class: 'dots', 'aria-label': `${shown} من ${c.target}` }, Array.from({ length: c.target }, (_, i) => h('i', { class: i < shown ? 'on' : '' })));
+  }
+
+  function showResult(r) {
+    clearTimeout(resultTimer);
+    const c = r.customer;
+    const kind = !r.added ? 'warn' : 'ok';
+    const box = h('div', { class: 'result ' + kind, role: 'status' },
+      h('div', { class: 'big' }, r.added ? `تم ختم ${c.name}` : `${c.name}: ختم قبل قليل`),
+      !r.added ? h('div', {}, `يمكن الختم مرة أخرى بعد ${r.wait_minutes} دقيقة.`) : null,
+      r.offline && r.added ? h('div', { class: 'small' }, 'محفوظ على هذا الجهاز، وسيصل المالك عند عودة الإنترنت.') : null,
+      dots(c),
+      h('div', {}, `${Math.min(c.stamps, c.target)} من ${c.target} أختام`));
+    if (c.redeemable) {
+      const rb = h('button', { class: 'btn ok block', style: 'margin-top:10px' }, `تسليم: ${shop.reward_text}`);
+      rb.onclick = () => guard(rb, async () => {
+        try {
+          let rr;
+          try { rr = await api('POST', '/api/redeem', { customer_id: c.id }, session); off.touch(rr.customer.id, rr.customer.stamps, false); }
+          catch (e) {
+            if (e.status !== 0) throw e;
+            const o = off.redeemById(c.id);
+            if (!o) throw new Error('لا يوجد اتصال، ولا يمكن تسليم المكافأة الآن');
+            rr = { customer: o }; netStatus();
+          }
+          ui.result.replaceChildren(h('div', { class: 'result ok' }, h('div', { class: 'big' }, `تم تسليم ${shop.reward_text} لـ ${rr.customer.name}`)));
+          resultTimer = setTimeout(() => ui.result.replaceChildren(), 5000);
+        } catch (e) { if (e.status === 401) return logout(); toast(e.message, true); }
+      });
+      box.append(h('div', { class: 'big', style: 'margin-top:8px' }, 'المكافأة جاهزة'), rb);
+    } else {
+      resultTimer = setTimeout(() => ui.result.replaceChildren(), 5000);
+    }
+    ui.result.replaceChildren(box);
+  }
+
+  function showError(msg) {
+    clearTimeout(resultTimer);
+    ui.result.replaceChildren(h('div', { class: 'result bad', role: 'alert' }, h('div', { class: 'big' }, msg)));
+    resultTimer = setTimeout(() => ui.result.replaceChildren(), 5000);
+  }
+
+  document.addEventListener('visibilitychange', () => {
+    if (!session || !ui.video) return;
+    if (document.hidden) stopCam(); else if (!stream) startCam();
+  });
+
+  if (session) { showScanner(); startOffline(); } else showLogin();
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,351 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>لوحة المالك</title>
+<meta name="theme-color" content="#1A120E">
+<meta name="robots" content="noindex">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<main class="wrap wide" id="app"><div class="spinner" role="status" aria-label="جارٍ التحميل"></div></main>
+<script src="vendor/qrcode.js"></script>
+<script src="config.js"></script>
+<script src="app.js"></script>
+<script src="charts.js"></script>
+<script>
+(async () => {
+  const slug = slugFromPath();
+  const app = $('#app');
+  const KEY = 'rj_sess_' + slug;
+  let shop, session = null, settings = null, tab = 'overview';
+
+  try { shop = await api('GET', '/api/shop/' + encodeURIComponent(slug)); }
+  catch { app.replaceChildren(h('div', { class: 'card center' }, h('h1', {}, 'الرابط غير صحيح'))); return; }
+  applyBrand(shop.color);
+  setManifest('المالك — ' + shop.name, 'مالك ' + shop.name, shop.color);
+  document.title = 'لوحة ' + shop.name;
+
+  try { const s = JSON.parse(store.get(KEY) || 'null'); if (s && s.session && s.role === 'owner') session = s.session; } catch {}
+
+  const call = async (m, u, b) => {
+    try { return await api(m, u, b, session); }
+    catch (e) { if (e.status === 401 || e.status === 403) { logout(); } throw e; }
+  };
+
+  function logout() { store.del(KEY); session = null; showLogin(); }
+
+  function showLogin() {
+    const err = h('p', { class: 'err hide', role: 'alert' });
+    const pin = h('input', { type: 'password', inputmode: 'numeric', autocomplete: 'current-password', maxlength: 8, placeholder: '••••', class: 'num', required: true });
+    const btn = h('button', { class: 'btn block', type: 'submit' }, 'دخول');
+    app.replaceChildren(
+      h('div', { class: 'brandbar' }, h('div', { class: 'logo' }, [...shop.name][0]), h('div', {}, h('h1', {}, shop.name), h('div', { class: 'muted small' }, 'لوحة المالك'))),
+      h('form', { class: 'card', style: 'max-width:420px', novalidate: true, onsubmit: async (ev) => {
+        ev.preventDefault(); err.classList.add('hide');
+        await guard(btn, async () => {
+          try {
+            const r = await api('POST', '/api/login/owner', { slug, pin: pin.value });
+            session = r.session;
+            store.set(KEY, JSON.stringify({ session, role: 'owner' }));
+            await boot();
+          } catch (e) { err.textContent = e.message; err.classList.remove('hide'); pin.select(); }
+        });
+      } }, h('label', { class: 'f' }, 'رمز المالك', pin), err, btn));
+    pin.focus();
+  }
+
+  async function boot() {
+    app.replaceChildren(h('div', { class: 'spinner' }));
+    try { settings = await call('GET', '/api/admin/settings'); } catch { return; }
+    applyBrand(settings.color);
+    render();
+  }
+
+  const TABS = [['overview', 'نظرة عامة'], ['overdue', 'الغائبون'], ['customers', 'العملاء'], ['settings', 'الإعدادات']];
+
+  function render() {
+    const body = h('div', { id: 'body' });
+    app.replaceChildren(
+      h('div', { class: 'brandbar' },
+        h('div', { class: 'logo' }, [...settings.name][0]),
+        h('div', { style: 'flex:1' }, h('h1', {}, settings.name), h('div', { class: 'muted small' }, 'لوحة المالك')),
+        h('button', { class: 'btn ghost sm', onclick: logout }, 'خروج')),
+      h('div', { class: 'tabs', role: 'tablist' }, TABS.map(([k, label]) =>
+        h('button', { role: 'tab', 'aria-selected': k === tab, class: k === tab ? 'on' : '', onclick: () => { tab = k; render(); } }, label))),
+      body);
+    ({ overview, overdue, customers, settings: settingsTab })[tab](body);
+  }
+
+  const loading = (el) => el.replaceChildren(h('div', { class: 'spinner' }));
+  const failed = (el, e) => el.replaceChildren(h('div', { class: 'err' }, e.message));
+
+  /* ---------- overview ---------- */
+  async function overview(el) {
+    loading(el);
+    let s;
+    try { s = await call('GET', '/api/admin/summary'); } catch (e) { return failed(el, e); }
+    const m = (n, l, sub) => h('div', { class: 'metric' }, h('div', { class: 'n' }, n), h('div', { class: 'l' }, l), sub ? h('div', { class: 's' }, sub) : null);
+    el.replaceChildren(
+      s.overdue > 0 ? h('div', { class: 'hero' },
+        h('div', {}, h('b', {}, `${s.overdue} عميل`), ` لم يعودوا منذ أكثر من ${settings.overdue_days} يوماً.`),
+        h('div', { class: 'small', style: 'opacity:.8;margin:4px 0 12px' }, 'رسالة واتساب واحدة قد تعيد بعضهم هذا الأسبوع.'),
+        h('button', { class: 'btn wa', onclick: () => { tab = 'overdue'; render(); } }, 'راسلهم الآن')) : null,
+      h('div', { class: 'grid2' },
+        m(s.return_rate + '٪', 'نسبة العائدين', `${s.returning30} من ${s.active30} عميل نشط (٣٠ يوماً)`),
+        m(s.customers, 'إجمالي العملاء', `${s.new30} جدد آخر ٣٠ يوماً`),
+        m(s.visits7, 'زيارات آخر ٧ أيام'),
+        m(s.visits30, 'زيارات آخر ٣٠ يوماً'),
+        m(s.redeemed30, 'مكافآت مستلمة', 'آخر ٣٠ يوماً'),
+        m(s.overdue, 'عملاء غائبون', `أكثر من ${settings.overdue_days} يوماً`)),
+      dashHost);
+    dashboard(dashHost);
+  }
+
+  /* ---------- dashboard ---------- */
+  const MONTHS = ['يناير', 'فبراير', 'مارس', 'أبريل', 'مايو', 'يونيو', 'يوليو', 'أغسطس', 'سبتمبر', 'أكتوبر', 'نوفمبر', 'ديسمبر'];
+  const WDAYS = ['السبت', 'الأحد', 'الاثنين', 'الثلاثاء', 'الأربعاء', 'الخميس', 'الجمعة'];
+  const dLabel = (k, long) => { const [, mo, d] = k.split('-').map(Number); return long ? `${Charts.arN(d)} ${MONTHS[mo - 1]}` : `${Charts.arN(d)}/${Charts.arN(mo)}`; };
+  const hLabel = (hr) => { const x = hr % 12 || 12; return Charts.arN(x) + (hr < 12 ? 'ص' : 'م'); };
+  let dashRange = 30;
+  const dashHost = h('div', { class: 'dash', style: 'margin-top:14px' });
+
+  async function dashboard(el) {
+    el.replaceChildren(h('div', { class: 'spinner' }));
+    let d;
+    try { d = await call('GET', '/api/admin/dashboard?days=' + dashRange); } catch (e) { return failed(el, e); }
+    const k = d.kpi;
+    const range = h('div', { class: 'range' }, [[7, '٧ أيام'], [30, '٣٠ يوماً'], [90, '٩٠ يوماً']].map(([n, l]) =>
+      h('button', { class: n === dashRange ? 'on' : '', onclick: () => { dashRange = n; dashboard(el); } }, l)));
+    const m = (n, l, sub) => h('div', { class: 'metric' }, h('div', { class: 'n' }, n), h('div', { class: 'l' }, l), sub ? h('div', { class: 's' }, sub) : null);
+
+    const peakDay = Math.max(...d.wdays) > 0 ? d.wdays.indexOf(Math.max(...d.wdays)) : null;
+    const peakHr = Math.max(...d.hours) > 0 ? d.hours.indexOf(Math.max(...d.hours)) : null;
+    const insight = peakDay != null
+      ? h('div', { class: 'insight' }, `أزحم وقت: ${WDAYS[peakDay]} حوالي الساعة ${hLabel(peakHr)}. هذا أنسب وقت لعرض خاص، وأنسب وقت لتخفيف الضغط على الكاشير.`)
+      : h('div', { class: 'insight' }, 'لا زيارات في هذه الفترة بعد. ستظهر الرسوم مع أول ختم.');
+
+    const c1 = h('div'), c2 = h('div'), c3 = h('div'), c4 = h('div'), c5 = h('div');
+    const seg = d.segments, t = d.reward_target;
+    const ready = d.progress[t], progItems = d.progress.slice(0, t);
+    const card = (title, cap, ...kids) => h('div', { class: 'card', style: 'margin-top:12px' }, h('h2', {}, title), cap ? h('p', { class: 'cap' }, cap) : null, ...kids);
+
+    el.replaceChildren(
+      range,
+      h('div', { class: 'grid2' },
+        m(Charts.arN(k.visits), 'زيارات', `متوسط ${Charts.arN(k.avg_visits)} لكل عميل نشط`),
+        m(Charts.arN(k.active), 'عملاء زاروا', `منهم ${Charts.arN(k.returning)} عادوا مرتين فأكثر`),
+        m(Charts.arN(k.new_customers), 'عملاء جدد'),
+        m(Charts.arN(k.redeems), 'مكافآت مستلمة')),
+      insight,
+      card('الزيارات عبر الوقت', d.weekly ? 'كل عمود أسبوع.' : 'كل عمود يوم. المس العمود لرؤية التفاصيل.',
+        h('div', { class: 'legkeys' }, h('span', {}, h('i', { class: 'sw k1' }), 'عائدون'), h('span', {}, h('i', { class: 'sw k3' }), 'أول زيارة')), c1),
+      card('أيام الأسبوع', 'عدد الزيارات في كل يوم خلال الفترة.', c2),
+      card('ساعات اليوم', 'متى يأتي عملاؤك؟', c3),
+      card('حالة العملاء', `نشط: زار خلال ${Charts.arN(d.half)} أيام. معرّض للغياب: حتى ${Charts.arN(d.overdue_days)} يوماً.`, c4),
+      card('تقدم الأختام', ready ? `${Charts.arN(ready)} عميل مكافأتهم جاهزة الآن.` : 'كم عميلاً عند كل عدد من الأختام.', c5),
+      d.top.length ? card('الأكثر زيارة', null, ...d.top.map((x, i) => h('div', { class: 'row', style: 'cursor:pointer', onclick: () => showCustomer(x.id) },
+        h('div', { class: 'avatar' }, Charts.arN(i + 1)), h('div', { class: 'grow' }, h('div', { class: 'nm' }, x.name)), h('b', {}, Charts.arN(x.visits) + ' زيارة')))) : null);
+
+    Charts.stacked(c1, d.series.map((x) => ({ label: x.label, a: x.returning, b: x.first })), {
+      keys: { a: { label: 'عائدون', cls: 'k1' }, b: { label: 'أول زيارة', cls: 'k3' } },
+      fmtLabel: (l, long) => d.weekly && long ? 'أسبوع يبدأ ' + dLabel(l, true) : dLabel(l, long),
+    });
+    Charts.bars(c2, d.wdays, WDAYS.map((x) => x.replace('ال', '')), { unit: 'زيارة' });
+    Charts.bars(c3, d.hours, d.hours.map((_, i) => hLabel(i)), { unit: 'زيارة', every: 3 });
+    Charts.segments(c4, [
+      { label: 'نشطون', n: seg.active, cls: 'k1' }, { label: 'معرّضون للغياب', n: seg.risk, cls: 'k2' },
+      { label: 'غائبون', n: seg.lost, cls: 'k3' }, { label: 'سجّلوا بلا زيارة', n: seg.none, cls: 'k4' }]);
+    Charts.bars(c5, progItems, progItems.map((_, i) => Charts.arN(i)), { unit: 'عميل', peak: false });
+  }
+
+  /* ---------- customer history ---------- */
+  const fmtDT = (ts) => new Intl.DateTimeFormat('ar-EG', { timeZone: 'Africa/Cairo', day: 'numeric', month: 'long', hour: 'numeric', minute: '2-digit' }).format(new Date(ts));
+  async function showCustomer(id) {
+    const el = $('#body'); loading(el);
+    let d;
+    try { d = await call('GET', '/api/admin/customer/' + id); } catch (e) { return failed(el, e); }
+    const c = d.customer, st = d.stats, b = d.balance;
+    const m = (n, l) => h('div', { class: 'metric' }, h('div', { class: 'n' }, n), h('div', { class: 'l' }, l));
+    const chart = h('div');
+    const keys = Object.keys(d.months).sort().slice(-6);
+    const link = siteUrl('card.html', { t: c.token });
+    const msg = fillTemplate(settings.wa_template, { name: c.name.split(' ')[0], shop: settings.name, stamps: Math.min(b.stamps, d.reward_target), target: d.reward_target, reward: settings.reward_text });
+    el.replaceChildren(
+      h('button', { class: 'back', onclick: () => { tab = 'customers'; render(); } }, '→ كل العملاء'),
+      h('div', { class: 'card' },
+        h('div', { class: 'row', style: 'border:0;padding-top:0' },
+          h('div', { class: 'avatar' }, [...c.name][0]),
+          h('div', { class: 'grow' }, h('div', { class: 'nm' }, c.name), h('div', { class: 'sub' }, h('span', { class: 'ltr' }, '+' + c.phone)))),
+        h('div', { class: 'actions', style: 'flex-wrap:wrap' },
+          h('a', { class: 'btn wa sm', href: waLink(c.phone, msg), target: '_blank', rel: 'noopener' }, 'راسله على واتساب'),
+          h('button', { class: 'btn ghost sm', onclick: async () => { try { await navigator.clipboard.writeText(link); toast('تم نسخ رابط الكارت'); } catch { prompt('انسخ الرابط', link); } } }, 'نسخ رابط الكارت'))),
+      h('div', { class: 'grid2', style: 'margin-top:12px' },
+        m(Charts.arN(st.visits), 'زيارة'),
+        m(`${Charts.arN(Math.min(b.stamps, d.reward_target))}/${Charts.arN(d.reward_target)}`, 'أختام الكارت الحالي'),
+        m(st.avg_gap_days == null ? '—' : Charts.arN(st.avg_gap_days) + ' يوم', 'يزورك كل'),
+        m(Charts.arN(b.redeemed), 'مكافآت استلمها')),
+      h('div', { class: 'insight', style: 'margin-top:12px' },
+        st.visits ? `يفضّل ${WDAYS[st.fav_weekday]} حوالي الساعة ${hLabel(st.fav_hour)}. آخر زيارة ${ago(daysSince(st.last_visit))}.` : 'لم يزر بعد. شجّعه بأول ختم.'),
+      keys.length ? h('div', { class: 'card', style: 'margin-top:12px' }, h('h2', {}, 'زياراته شهرياً'), chart) : null,
+      h('div', { class: 'card', style: 'margin-top:12px' }, h('h2', {}, 'سجل الزيارات'),
+        d.events.length ? h('ul', { class: 'hist' }, d.events.map((e) => h('li', {},
+          h('i', { class: 'dot ' + (e.type === 'redeem' ? 'r' : e.type === 'nudge' ? 'n' : '') }),
+          h('span', { class: 't' }, e.type === 'stamp' ? 'زيارة (ختم)' : e.type === 'redeem' ? 'استلم ' + settings.reward_text : 'راسلته'),
+          h('small', {}, fmtDT(e.at))))) : h('p', { class: 'muted' }, 'لا سجل بعد.')));
+    if (keys.length) Charts.bars(chart, keys.map((k) => d.months[k]), keys.map((k) => MONTHS[Number(k.slice(5)) - 1]), { unit: 'زيارة', peak: false });
+  }
+
+  /* ---------- overdue ---------- */
+  async function overdue(el) {
+    loading(el);
+    let d;
+    try { d = await call('GET', '/api/admin/overdue'); } catch (e) { return failed(el, e); }
+    if (!d.items.length) {
+      el.replaceChildren(h('div', { class: 'card center' }, h('h2', {}, 'لا يوجد غائبون'), h('p', { class: 'muted' }, `كل عملائك زاروك خلال آخر ${d.overdue_days} يوماً.`)));
+      return;
+    }
+    const card = h('div', { class: 'card' },
+      h('h2', {}, `غابوا أكثر من ${d.overdue_days} يوماً (${d.items.length})`),
+      h('p', { class: 'muted small', style: 'margin-top:-6px' }, 'مرتبون بالأقرب لمكافأتهم أولاً.'));
+    d.items.forEach((c) => {
+      const nudgeDays = daysSince(c.last_nudge);
+      const row = h('div', { class: 'row' },
+        h('div', { class: 'avatar' }, [...c.name][0]),
+        h('div', { class: 'grow' },
+          h('div', { class: 'nm' }, c.name),
+          h('div', { class: 'sub' }, `آخر زيارة ${ago(c.days_since)} · ${Math.min(c.stamps, settings.reward_target)}/${settings.reward_target} ختم`),
+          c.last_nudge ? h('span', { class: 'pill' }, `راسلته ${ago(nudgeDays)}`) : null),
+        h('div', { class: 'actions' },
+          h('button', { class: 'btn wa sm', onclick: async () => {
+            const msg = fillTemplate(settings.wa_template, { name: c.name.split(' ')[0], shop: settings.name, stamps: Math.min(c.stamps, settings.reward_target), target: settings.reward_target, reward: settings.reward_text });
+            window.open(waLink(c.phone, msg), '_blank', 'noopener');
+            try { await call('POST', '/api/admin/nudge', { customer_id: c.id }); toast('تم تسجيل المراسلة'); overdueRefresh(); } catch {}
+          } }, 'واتساب')));
+      card.append(row);
+    });
+    el.replaceChildren(card);
+  }
+  const overdueRefresh = () => { if (tab === 'overdue') overdue($('#body')); };
+
+  /* ---------- customers ---------- */
+  async function customers(el) {
+    const list = h('div', { class: 'card' });
+    const search = h('input', { type: 'search', placeholder: 'ابحث بالاسم أو الرقم', style: 'margin:0 0 12px' });
+    let timer;
+    async function load() {
+      list.replaceChildren(h('div', { class: 'spinner' }));
+      try {
+        const d = await call('GET', '/api/admin/customers?q=' + encodeURIComponent(search.value));
+        list.replaceChildren(h('h2', {}, `العملاء (${d.total})`));
+        if (!d.items.length) list.append(h('p', { class: 'muted' }, 'لا نتائج.'));
+        d.items.forEach((c) => {
+          const link = siteUrl('card.html', { t: c.token });
+          const msg = `أهلاً ${c.name.split(' ')[0]}، هذا كارت ولائك في ${settings.name}. احفظه على هاتفك:\n${link}`;
+          list.append(h('div', { class: 'row' },
+            h('div', { class: 'avatar', style: 'cursor:pointer', onclick: () => showCustomer(c.id) }, [...c.name][0]),
+            h('div', { class: 'grow', style: 'cursor:pointer', onclick: () => showCustomer(c.id) },
+              h('div', { class: 'nm' }, c.name),
+              h('div', { class: 'sub' }, h('span', { class: 'ltr' }, '+' + c.phone), ` · ${c.visits} زيارة · ${ago(c.days_since)}`)),
+            h('div', { class: 'actions' },
+              h('button', { class: 'btn ghost sm', onclick: () => showCustomer(c.id) }, 'السجل'),
+              h('button', { class: 'btn ghost sm', title: 'نسخ رابط الكارت', onclick: async () => {
+                try { await navigator.clipboard.writeText(link); toast('تم نسخ الرابط'); } catch { prompt('انسخ الرابط', link); }
+              } }, 'نسخ'),
+              h('a', { class: 'btn wa sm', href: waLink(c.phone, msg), target: '_blank', rel: 'noopener' }, 'إرسال الكارت'))));
+        });
+      } catch (e) { failed(list, e); }
+    }
+    search.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(load, 250); });
+    el.replaceChildren(search, list);
+    load();
+  }
+
+  /* ---------- settings ---------- */
+  function settingsTab(el) {
+    const s = settings;
+    const f = {
+      name: h('input', { type: 'text', value: s.name, maxlength: 40 }),
+      color: h('input', { type: 'color', value: s.color }),
+      reward_text: h('input', { type: 'text', value: s.reward_text, maxlength: 40 }),
+      reward_target: h('input', { type: 'number', value: s.reward_target, min: 2, max: 20, class: 'num' }),
+      min_gap_minutes: h('input', { type: 'number', value: s.min_gap_minutes, min: 0, max: 1440, class: 'num' }),
+      overdue_days: h('input', { type: 'number', value: s.overdue_days, min: 3, max: 90, class: 'num' }),
+      wa_template: h('textarea', { maxlength: 500 }, s.wa_template),
+    };
+    const err = h('p', { class: 'err hide', role: 'alert' });
+    const save = h('button', { class: 'btn block', type: 'submit' }, 'حفظ الإعدادات');
+
+    const form = h('form', { class: 'card', novalidate: true, onsubmit: async (ev) => {
+      ev.preventDefault(); err.classList.add('hide');
+      await guard(save, async () => {
+        const body = Object.fromEntries(Object.entries(f).map(([k, el]) => [k, el.value]));
+        try {
+          await call('PUT', '/api/admin/settings', body);
+          settings = await call('GET', '/api/admin/settings');
+          applyBrand(settings.color); toast('تم الحفظ'); render();
+        } catch (e) { err.textContent = e.message; err.classList.remove('hide'); }
+      });
+    } },
+      h('h2', {}, 'المقهى والمكافأة'),
+      h('label', { class: 'f' }, 'اسم المقهى', f.name),
+      h('label', { class: 'f' }, 'لون العلامة', h('div', {}, f.color)),
+      h('label', { class: 'f' }, 'المكافأة', f.reward_text),
+      h('label', { class: 'f' }, 'عدد الأختام للمكافأة', f.reward_target),
+      h('label', { class: 'f' }, 'أقل فاصل بين ختمين (بالدقائق)', f.min_gap_minutes, h('span', { class: 'hint' }, 'يمنع ختم نفس العميل مرتين في نفس الجلسة. ١٢٠ دقيقة مناسبة.')),
+      h('label', { class: 'f' }, 'نعتبر العميل غائباً بعد (أيام)', f.overdue_days),
+      h('label', { class: 'f' }, 'رسالة واتساب للغائبين', f.wa_template, h('span', { class: 'hint' }, 'المتغيرات: {name} {shop} {stamps} {target} {reward}')),
+      err, save);
+
+    const joinUrl = siteUrl('join.html', { s: slug });
+    const share = h('div', { class: 'card qrshare' },
+      h('h2', {}, 'رابط انضمام العملاء'),
+      h('p', { class: 'muted small', style: 'margin-top:-6px' }, 'اطبع هذا الـ QR وضعه على الكاونتر والطاولات. العميل يمسحه ويحصل على كارته.'),
+      h('div', { html: qrSvg(joinUrl, 6) }),
+      h('div', { class: 'small ltr', style: 'margin:10px 0 12px;word-break:break-all' }, joinUrl),
+      h('div', { style: 'display:flex;gap:8px;justify-content:center;flex-wrap:wrap' },
+        h('button', { class: 'btn ghost sm', onclick: async () => { try { await navigator.clipboard.writeText(joinUrl); toast('تم نسخ الرابط'); } catch { prompt('انسخ الرابط', joinUrl); } } }, 'نسخ الرابط'),
+        h('a', { class: 'btn ghost sm', href: siteUrl('scan.html', { s: slug }), target: '_blank', rel: 'noopener' }, 'شاشة الكاشير')));
+
+    const p1 = h('input', { type: 'password', inputmode: 'numeric', maxlength: 8, class: 'num', placeholder: 'اتركه فارغاً بلا تغيير', autocomplete: 'new-password' });
+    const p2 = h('input', { type: 'password', inputmode: 'numeric', maxlength: 8, class: 'num', placeholder: 'اتركه فارغاً بلا تغيير', autocomplete: 'new-password' });
+    const perr = h('p', { class: 'err hide', role: 'alert' });
+    const pbtn = h('button', { class: 'btn ghost block', type: 'submit' }, 'تغيير الرموز');
+    const pins = h('form', { class: 'card', novalidate: true, onsubmit: async (ev) => {
+      ev.preventDefault(); perr.classList.add('hide');
+      await guard(pbtn, async () => {
+        try { await call('PUT', '/api/admin/pins', { owner_pin: p1.value, cashier_pin: p2.value }); p1.value = p2.value = ''; toast('تم تحديث الرموز'); }
+        catch (e) { perr.textContent = e.message; perr.classList.remove('hide'); }
+      });
+    } },
+      h('h2', {}, 'رموز الدخول'),
+      h('label', { class: 'f' }, 'رمز المالك الجديد', p1),
+      h('label', { class: 'f' }, 'رمز الكاشير الجديد', p2, h('span', { class: 'hint' }, '٤ إلى ٨ أرقام. غيّر رمز الكاشير عند تغيّر الموظفين.')),
+      perr, pbtn);
+
+    const exp = h('div', { class: 'card' },
+      h('h2', {}, 'بياناتك'),
+      h('button', { class: 'btn ghost block', onclick: async (ev) => {
+        await guard(ev.currentTarget, async () => {
+          try {
+            const res = await fetch(RJ_API + '/admin/export', { headers: { Authorization: 'Bearer ' + session } });
+            if (!res.ok) throw new Error('تعذّر التصدير');
+            const url = URL.createObjectURL(await res.blob());
+            const a = h('a', { href: url, download: 'customers.csv' });
+            document.body.append(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 2000);
+          } catch (e) { toast(e.message, true); }
+        });
+      } }, 'تصدير العملاء (CSV)'));
+
+    el.replaceChildren(form, share, pins, exp);
+  }
+
+  session ? boot() : showLogin();
+})();
+</script>
+</body>
+</html>

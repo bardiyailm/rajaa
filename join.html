@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>انضم لكارت الولاء</title>
+<meta name="theme-color" content="#0F766E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<main class="wrap" id="app"><div class="spinner" role="status" aria-label="جارٍ التحميل"></div></main>
+<script src="config.js"></script>
+<script src="app.js"></script>
+<script>
+(async () => {
+  const slug = slugFromPath();
+  const app = $('#app');
+  const saved = store.get('rj_card_' + slug);
+  if (saved) { location.replace(siteUrl('card.html', { t: saved })); return; }
+
+  let shop;
+  try { shop = await api('GET', '/api/shop/' + encodeURIComponent(slug)); }
+  catch (e) { app.replaceChildren(h('div', { class: 'card center' }, h('h1', {}, 'الرابط غير صحيح'), h('p', { class: 'muted' }, 'اطلب الرابط من المقهى.'))); return; }
+
+  applyBrand(shop.color);
+  document.title = 'كارت ولاء ' + shop.name;
+
+  const err = h('p', { class: 'err hide', role: 'alert' });
+  const name = h('input', { type: 'text', autocomplete: 'name', maxlength: 40, placeholder: 'اسمك', required: true, enterkeyhint: 'next' });
+  const phone = h('input', { type: 'tel', autocomplete: 'tel', inputmode: 'tel', placeholder: '01012345678', class: 'num', required: true, enterkeyhint: 'done' });
+  const btn = h('button', { class: 'btn block', type: 'submit' }, 'احصل على كارتك');
+
+  const form = h('form', { novalidate: true, onsubmit: async (ev) => {
+    ev.preventDefault();
+    err.classList.add('hide');
+    await guard(btn, async () => {
+      btn.textContent = 'لحظة…';
+      try {
+        const r = await api('POST', `/api/shop/${encodeURIComponent(slug)}/join`, { name: name.value, phone: phone.value });
+        store.set('rj_card_' + slug, r.token);
+        location.replace(siteUrl('card.html', { t: r.token }));
+      } catch (e) {
+        err.textContent = e.message; err.classList.remove('hide');
+      }
+    });
+  } },
+    h('label', { class: 'f' }, 'الاسم', name),
+    h('label', { class: 'f' }, 'رقم الهاتف', phone, h('span', { class: 'hint' }, 'نستخدمه فقط لتذكيرك بمكافأتك. لا نشاركه مع أحد.')),
+    err, btn);
+
+  app.replaceChildren(
+    h('div', { class: 'brandbar' }, h('div', { class: 'logo' }, [...shop.name][0]), h('div', {}, h('h1', {}, shop.name), h('div', { class: 'muted small' }, 'كارت الولاء'))),
+    h('div', { class: 'card' },
+      h('h2', {}, `كل ${shop.reward_target} زيارات = ${shop.reward_text}`),
+      h('p', { class: 'muted', style: 'margin-top:-4px' }, 'سجّل مرة واحدة، وكارتك يبقى على هاتفك. لا تحتاج لتحميل تطبيق.'),
+      form));
+})();
+</script>
+</body>
+</html>

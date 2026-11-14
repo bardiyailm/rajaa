@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>كارت الولاء</title>
+<meta name="theme-color" content="#0F766E">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<main class="wrap" id="app"><div class="spinner" role="status" aria-label="جارٍ التحميل"></div></main>
+<script src="vendor/qrcode.js"></script>
+<script src="config.js"></script>
+<script src="app.js"></script>
+<script src="offline.js"></script>
+<script>
+(() => {
+  const token = new URLSearchParams(location.search).get('t') || '';
+  const app = $('#app');
+
+  if ('serviceWorker' in navigator) { const warm = () => fetch(location.href).catch(() => {}); navigator.serviceWorker.register('sw.js').then(() => navigator.serviceWorker.ready).then(() => { if (navigator.serviceWorker.controller) warm(); else navigator.serviceWorker.addEventListener('controllerchange', warm, { once: true }); }).catch(() => {}); }
+  let built = false, ttlTimer, nextFetch, lastTtl = 30, cur = null, codeTimer, offlineHint = false;
+  const CK = 'rj_cache_' + token;
+  const ui = {};
+
+  function build(d) {
+    applyBrand(d.shop.color);
+    setManifest(d.shop.name, d.shop.name, d.shop.color);
+    document.title = d.shop.name;
+    store.set('rj_card_' + d.shop.slug, token);
+
+    ui.count = h('div', { class: 'count' });
+    ui.stamps = h('div', { class: 'stamps', role: 'img' });
+    ui.reward = h('div', { class: 'reward' });
+    ui.qr = h('div');
+    ui.bar = h('i');
+    ui.hint = h('p', { class: 'muted small center', style: 'margin:12px 0 0' }, 'أظهر هذا الكود للكاشير عند كل زيارة. يتجدد تلقائياً.');
+
+    app.replaceChildren(
+      h('div', { class: 'loyal' },
+        h('div', { class: 'top' },
+          h('div', {}, h('div', { class: 'shopname' }, d.shop.name), h('div', { class: 'who' }, d.customer.name)),
+          ui.count),
+        ui.stamps, ui.reward),
+      h('div', { class: 'qrbox' }, ui.qr, h('div', { class: 'bar' }, ui.bar), ui.hint),
+      ui.hist = h('div', { class: 'card', style: 'margin-top:14px' }),
+      standalone() ? null : h('p', { class: 'muted small center', style: 'margin-top:16px' }, 'للوصول السريع: من قائمة المتصفح اختر «إضافة إلى الشاشة الرئيسية».'));
+    built = true;
+  }
+
+  function standalone() {
+    return matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+  }
+
+  function paint(d) {
+    if (!built) build(d);
+    const t = d.shop.reward_target, shown = Math.min(d.stamps, t);
+    ui.count.replaceChildren(String(shown), h('small', {}, ' / ' + t));
+    ui.stamps.setAttribute('aria-label', `${shown} من ${t} أختام`);
+    ui.stamps.replaceChildren(...Array.from({ length: t }, (_, i) => h('div', { class: 'stamp' + (i < shown ? ' on' : ''), html: SVG_CUP })));
+    if (d.redeemable) {
+      ui.reward.className = 'reward ready';
+      ui.reward.textContent = `مبروك! ${d.shop.reward_text} جاهزة. أخبر الكاشير.`;
+    } else {
+      ui.reward.className = 'reward';
+      const left = t - d.stamps;
+      ui.reward.textContent = left === 1 ? `باقي ختم واحد على ${d.shop.reward_text}` : `باقي ${left} أختام على ${d.shop.reward_text}`;
+    }
+    const fd = (ts) => new Intl.DateTimeFormat('ar-EG', { timeZone: 'Africa/Cairo', day: 'numeric', month: 'long', hour: 'numeric', minute: '2-digit' }).format(new Date(ts));
+    ui.hist.replaceChildren(h('h2', {}, 'زياراتك'), (d.history || []).length
+      ? h('ul', { class: 'hist' }, d.history.map((e) => h('li', {}, h('i', { class: 'dot' + (e.type === 'redeem' ? ' r' : '') }), h('span', { class: 't' }, e.type === 'redeem' ? 'استلمت ' + d.shop.reward_text : 'ختم جديد'), h('small', {}, fd(e.created_at)))))
+      : h('p', { class: 'muted small' }, 'لا زيارات بعد. أول ختم عند أول زيارة.'));
+    ui.hint.textContent = 'أظهر هذا الكود للكاشير عند كل زيارة. يتجدد تلقائياً.';
+    cur = d;
+    try { localStorage.setItem(CK, JSON.stringify(d)); } catch {}
+    if (offlineHint) ui.hint.textContent = 'بدون إنترنت: الكود يعمل، وتتحدّث الأختام عند عودة الشبكة.';
+    drawCode();
+    clearTimeout(nextFetch);
+    nextFetch = setTimeout(load, 20000);
+  }
+
+  /* الكود يُولَّد على الهاتف نفسه كل ٣٠ ثانية فيعمل بلا إنترنت */
+  async function drawCode() {
+    clearTimeout(codeTimer);
+    if (!cur || !ui.qr) return;
+    const ttl = Math.ceil((30000 - (Date.now() % 30000)) / 1000);
+    let code = cur.code;
+    if (cur.seed && window.RJ && RJ.available()) { try { code = await RJ.makeCode(token, cur.seed); } catch {} }
+    ui.qr.innerHTML = qrSvg(code, 4);
+    runBar(ttl);
+    codeTimer = setTimeout(drawCode, ttl * 1000 + 60);
+  }
+
+  function runBar(ttl) {
+    ui.bar.style.transition = 'none';
+    ui.bar.style.transform = `scaleX(${ttl / 30})`;
+    void ui.bar.offsetWidth;
+    ui.bar.style.transition = `transform ${ttl}s linear`;
+    ui.bar.style.transform = 'scaleX(0)';
+  }
+
+  async function load() {
+    try {
+      const d = await api('GET', '/api/card/' + encodeURIComponent(token));
+      offlineHint = false;
+      paint(d);
+    } catch (e) {
+      if (e.status === 404) {
+        app.replaceChildren(h('div', { class: 'card center' }, h('h1', {}, 'الكارت غير موجود'), h('p', { class: 'muted' }, 'اطلب من المقهى إعادة إرسال رابط كارتك.')));
+        return;
+      }
+      offlineHint = true;
+      let cached = null;
+      try { cached = JSON.parse(localStorage.getItem(CK) || 'null'); } catch {}
+      if (!built && cached) paint(cached);
+      else if (built) ui.hint.textContent = 'بدون إنترنت: الكود يعمل، وتتحدّث الأختام عند عودة الشبكة.';
+      else app.replaceChildren(h('div', { class: 'card center' }, h('p', {}, 'افتح كارتك مرة واحدة بالإنترنت ليعمل بعدها بدون إنترنت.'), h('button', { class: 'btn', onclick: load }, 'إعادة المحاولة')));
+      clearTimeout(nextFetch);
+      nextFetch = setTimeout(load, 5000);
+    }
+  }
+
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) { load(); drawCode(); } });
+  load();
+})();
+</script>
+</body>
+</html>
