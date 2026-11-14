@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>دخول — رجعة</title>
+<meta name="theme-color" content="#0F766E">
+<meta name="robots" content="noindex">
+<link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<main class="wrap" id="app"></main>
+<script src="config.js"></script>
+<script src="app.js"></script>
+<script>
+(() => {
+  const app = $('#app');
+  const err = h('p', { class: 'err hide', role: 'alert' });
+  const user = h('input', { type: 'text', autocomplete: 'username', autocapitalize: 'none', spellcheck: 'false', class: 'num', placeholder: 'ahmed.samir', required: true });
+  const code = h('input', { type: 'password', inputmode: 'numeric', autocomplete: 'current-password', maxlength: 8, class: 'num', placeholder: '••••', required: true });
+  const role = h('select', {}, h('option', { value: 'owner' }, 'مالك المقهى'), h('option', { value: 'cashier' }, 'كاشير'));
+  const btn = h('button', { class: 'btn block', type: 'submit' }, 'دخول');
+  app.append(
+    h('div', { class: 'brandbar' }, h('div', { class: 'logo' }, 'ر'), h('div', {}, h('h1', {}, 'رجعة'), h('div', { class: 'muted small' }, 'تسجيل الدخول'))),
+    h('form', { class: 'card', style: 'max-width:420px', novalidate: true, onsubmit: async (ev) => {
+      ev.preventDefault(); err.classList.add('hide'); btn.disabled = true;
+      const slug = user.value.trim().toLowerCase();
+      try {
+        const r = await api('POST', '/api/login/' + role.value, { slug, pin: code.value });
+        store.set('rj_sess_' + slug, JSON.stringify({ session: r.session, role: r.role }));
+        location.replace(siteUrl(role.value === 'owner' ? 'admin.html' : 'scan.html', { s: slug }));
+      } catch (e) { err.textContent = e.message; err.classList.remove('hide'); btn.disabled = false; code.select(); }
+    } },
+      h('label', { class: 'f' }, 'اسم المستخدم', user),
+      h('label', { class: 'f' }, 'الرمز', code),
+      h('label', { class: 'f' }, 'الدخول كـ', role),
+      err, btn),
+    h('p', { class: 'muted small center', style: 'margin-top:14px' }, 'ليس لديك حساب؟ ', h('a', { href: 'apply.html' }, 'سجّل مقهاك')));
+})();
+</script>
+</body>
+</html>

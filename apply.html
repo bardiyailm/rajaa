@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>سجّل مقهاك في رجعة</title>
+<meta name="theme-color" content="#0F766E">
+<meta name="robots" content="noindex">
+<link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<main class="wrap" id="app"></main>
+<script src="config.js"></script>
+<script src="app.js"></script>
+<script>
+(() => {
+  const app = $('#app');
+  const err = h('p', { class: 'err hide', role: 'alert' });
+  const f = {
+    owner_name: h('input', { type: 'text', autocomplete: 'name', maxlength: 60, placeholder: 'الاسم الكامل', required: true }),
+    phone: h('input', { type: 'tel', autocomplete: 'tel', inputmode: 'tel', placeholder: '01012345678', class: 'num', required: true }),
+    cafe_name: h('input', { type: 'text', maxlength: 60, placeholder: 'اسم المقهى', required: true }),
+    address: h('input', { type: 'text', maxlength: 140, placeholder: 'المدينة والحي والشارع', required: true }),
+  };
+  const btn = h('button', { class: 'btn block', type: 'submit' }, 'إرسال الطلب');
+  const form = h('form', { class: 'card', style: 'max-width:420px', novalidate: true, onsubmit: async (ev) => {
+    ev.preventDefault(); err.classList.add('hide'); btn.disabled = true;
+    try {
+      await api('POST', '/api/request', Object.fromEntries(Object.entries(f).map(([k, el]) => [k, el.value])));
+      app.replaceChildren(
+        h('div', { class: 'brandbar' }, h('div', { class: 'logo' }, 'ر'), h('div', {}, h('h1', {}, 'رجعة'), h('div', { class: 'muted small' }, 'كارت ولاء رقمي للمقاهي'))),
+        h('div', { class: 'card center' }, h('h2', {}, 'تم استلام طلبك ✅'),
+          h('p', { class: 'muted' }, 'سنراجع الطلب ونتواصل معك على رقم هاتفك، وستصلك بيانات الدخول (اسم المستخدم والرمز) بعد الموافقة.')));
+    } catch (e) { err.textContent = e.message; err.classList.remove('hide'); btn.disabled = false; }
+  } },
+    h('h2', {}, 'سجّل مقهاك'),
+    h('p', { class: 'muted small' }, 'املأ البيانات وسيصلك اسم مستخدم ورمز دخول بعد الموافقة.'),
+    h('label', { class: 'f' }, 'اسمك', f.owner_name),
+    h('label', { class: 'f' }, 'رقم هاتفك', f.phone),
+    h('label', { class: 'f' }, 'اسم المقهى', f.cafe_name),
+    h('label', { class: 'f' }, 'عنوان المقهى', f.address),
+    err, btn);
+  app.append(
+    h('div', { class: 'brandbar' }, h('div', { class: 'logo' }, 'ر'), h('div', {}, h('h1', {}, 'رجعة'), h('div', { class: 'muted small' }, 'كارت ولاء رقمي للمقاهي'))),
+    form);
+})();
+</script>
+</body>
+</html>

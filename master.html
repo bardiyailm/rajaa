@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>إدارة رجعة</title>
+<meta name="theme-color" content="#0F766E">
+<meta name="robots" content="noindex">
+<link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<main class="wrap" id="app"></main>
+<script src="config.js"></script>
+<script src="app.js"></script>
+<script>
+(async () => {
+  const app = $('#app');
+  const KEY = 'rj_master';
+  let session = null, creds = null;
+  try { session = store.get(KEY) || null; } catch {}
+  const when = (t) => new Date(t).toLocaleString('ar-EG', { dateStyle: 'medium', timeStyle: 'short' });
+  const head = () => h('div', { class: 'brandbar' }, h('div', { class: 'logo' }, 'ر'), h('div', {}, h('h1', {}, 'إدارة رجعة'), h('div', { class: 'muted small' }, 'طلبات المقاهي')));
+  const call = async (m, u, b) => { try { return await api(m, u, b, session); } catch (e) { if (e.status === 401) { store.del(KEY); session = null; login(); } throw e; } };
+
+  function login() {
+    const err = h('p', { class: 'err hide', role: 'alert' });
+    const code = h('input', { type: 'password', inputmode: 'numeric', class: 'num', placeholder: '••••••••', required: true });
+    const btn = h('button', { class: 'btn block', type: 'submit' }, 'دخول');
+    app.replaceChildren(head(), h('form', { class: 'card', style: 'max-width:420px', novalidate: true, onsubmit: async (ev) => {
+      ev.preventDefault(); err.classList.add('hide'); btn.disabled = true;
+      try { const r = await api('POST', '/api/master/login', { code: code.value }); session = r.session; store.set(KEY, session); list(); }
+      catch (e) { err.textContent = e.message; err.classList.remove('hide'); btn.disabled = false; code.select(); }
+    } }, h('label', { class: 'f' }, 'رمز الإدارة', code), err, btn));
+  }
+
+  function credsCard() {
+    const url = siteUrl('login.html');
+    const msg = `أهلاً ${creds.owner_name} 👋\nتمت الموافقة على مقهى «${creds.cafe_name}» في رجعة ✅\n\nاسم المستخدم: ${creds.username}\nرمز المالك: ${creds.owner_code}\nرمز الكاشير: ${creds.cashier_code}\n\nرابط الدخول: ${url}\nاحتفظ بهذه الرموز، ولن تظهر مرة أخرى.`;
+    return h('div', { class: 'card', style: 'border:2px solid var(--brand,#0F766E);margin-bottom:16px' },
+      h('h2', {}, 'بيانات الدخول (تظهر مرة واحدة فقط)'),
+      h('p', {}, h('b', {}, creds.cafe_name), ' — ', creds.owner_name),
+      h('p', { dir: 'ltr', style: 'text-align:right;line-height:2' }, 'اسم المستخدم: ', h('b', {}, creds.username), h('br'), 'رمز المالك: ', h('b', {}, creds.owner_code), h('br'), 'رمز الكاشير: ', h('b', {}, creds.cashier_code)),
+      h('p', { style: 'display:grid;gap:8px' },
+        h('a', { class: 'btn', href: waLink(creds.phone, msg), target: '_blank', rel: 'noopener' }, 'أرسلها له على واتساب'),
+        h('button', { class: 'btn ghost', onclick: async () => { try { await navigator.clipboard.writeText(msg); toast('تم النسخ'); } catch { toast('تعذر النسخ', true); } } }, 'نسخ الرسالة'),
+        h('button', { class: 'btn ghost', onclick: () => { creds = null; list(); } }, 'تم، أخفِ البيانات')));
+  }
+
+  async function act(path, id, btn) {
+    btn.disabled = true;
+    try { const r = await call('POST', path, { id }); if (r.username) creds = r; await list(); }
+    catch (e) { toast(e.message, true); btn.disabled = false; }
+  }
+
+  async function list() {
+    let d;
+    try { d = await call('GET', '/api/master/requests'); } catch { return; }
+    const row = (r) => {
+      const st = { pending: 'قيد المراجعة', approved: 'تمت الموافقة', rejected: 'مرفوض' }[r.status];
+      const btns = r.status === 'pending'
+        ? [h('button', { class: 'btn sm', onclick: (e) => act('/api/master/approve', r.id, e.currentTarget) }, 'موافقة'), h('button', { class: 'btn ghost sm', onclick: (e) => act('/api/master/reject', r.id, e.currentTarget) }, 'رفض')]
+        : r.status === 'approved' ? [h('button', { class: 'btn ghost sm', onclick: (e) => act('/api/master/reset', r.id, e.currentTarget) }, 'رمز جديد')] : [];
+      return h('div', { class: 'card', style: 'margin-bottom:10px' },
+        h('div', { style: 'display:flex;justify-content:space-between;gap:8px;align-items:center' }, h('b', {}, r.cafe_name), h('span', { class: 'muted small' }, st)),
+        h('p', { class: 'muted small', style: 'margin:6px 0' }, r.owner_name, ' · ', h('span', { dir: 'ltr' }, '+' + r.phone), h('br'), r.address, h('br'), when(r.created_at), r.slug ? [h('br'), 'المستخدم: ', h('span', { dir: 'ltr' }, r.slug)] : ''),
+        btns.length ? h('div', { style: 'display:flex;gap:8px' }, btns) : '');
+    };
+    const pending = d.items.filter((r) => r.status === 'pending').length;
+    app.replaceChildren(head(),
+      h('div', { style: 'display:flex;justify-content:space-between;align-items:center;margin-bottom:12px' }, h('b', {}, pending ? `${pending} طلب ينتظر مراجعتك` : 'لا طلبات جديدة'),
+        h('button', { class: 'btn ghost sm', onclick: () => { store.del(KEY); session = null; login(); } }, 'خروج')),
+      creds ? credsCard() : '',
+      d.items.length ? d.items.map(row) : h('p', { class: 'muted center' }, 'لم يصل أي طلب بعد.'));
+  }
+
+  session ? list() : login();
+})();
+</script>
+</body>
+</html>
